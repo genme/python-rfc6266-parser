@@ -56,19 +56,6 @@ def test_location_fallback():
     ).filename_unsafe == u'étoilé'
 
 
-def test_strict():
-    # Trailing ; means the header is rejected
-    assert parse_headers('attachment;').disposition == 'inline'
-    assert parse_headers('attachment; key=val;').disposition == 'inline'
-    try:
-        cd = parse_headers(
-            'attachment; filename="spa  ced";')
-    except ValueError:
-        assert True
-    else:
-        assert False, cd
-
-
 def test_relaxed():
     assert parse_headers(
         'attachment;', relaxed=True).disposition == 'attachment'
@@ -78,7 +65,6 @@ def test_relaxed():
         'attachment; filename="spa  ced";',
         relaxed=True)
     assert cd.filename_unsafe == u'spa ced'
-
 
 
 def test_roundtrip():
@@ -94,4 +80,3 @@ def test_roundtrip():
     assert_roundtrip(' a b')
     assert_roundtrip('a\"b')
     assert_roundtrip(u'aéio   o♥u"qfsdf!')
-

@@ -1,5 +1,7 @@
 *.pyc
 build/
 dist/
-rfc6266_parser.egg-info/
+*.egg-info/
 .tox/
+.venv/
+.python-version/

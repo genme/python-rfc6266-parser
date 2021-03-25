@@ -1,5 +1,3 @@
-# vim: set fileencoding=utf-8 sw=4 ts=4 et :
-
 """Implements RFC 6266, the Content-Disposition HTTP header.
 
 parse_headers handles the receiver side.
@@ -11,20 +9,14 @@ filename_unsafe, filename_sanitized.
 build_header handles the sender side.
 """
 
-from lepl import (
-    Any, AnyBut, Drop, DroppedSpace, FullFirstMatchException, Lookahead,
-    Optional, Regexp, Star,
-)
-from collections import namedtuple
-from urllib import quote, unquote
-from urlparse import urlsplit
-from string import hexdigits, ascii_letters, digits
-
-import posixpath
+import cgi
 import os.path
-import re
+import posixpath
 import sys
+from collections import namedtuple
+from urllib.parse import quote, unquote, urlsplit
 
+from werkzeug.http import parse_options_header
 __all__ = (
     'ContentDisposition',
     'parse_headers',
@@ -33,28 +25,17 @@ __all__ = (
     'build_header',
 )
 
-
-PY3K = sys.version_info >= (3,)
-
 LangTagged = namedtuple('LangTagged', 'string langtag')
 
 
-if PY3K:
-    # XXX Both implementations allow stray %
-    def percent_encode(string, safe, encoding):
-        return quote(string, safe, encoding, errors='strict')
+# XXX Both implementations allow stray %
+def percent_encode(string, safe, encoding):
+    return quote(string, safe, encoding, errors='strict')
 
-    def percent_decode(string, encoding):
-        # unquote doesn't default to strict, fix that
-        return unquote(string, encoding, errors='strict')
-else:
-    def percent_encode(string, **kwargs):
-        encoding = kwargs.pop('encoding')
-        return quote(string.encode(encoding), **kwargs)
 
-    def percent_decode(string, **kwargs):
-        encoding = kwargs.pop('encoding')
-        return unquote(string, **kwargs).decode(encoding)
+def percent_decode(string, encoding):
+    # unquote doesn't default to strict, fix that
+    return unquote(string, encoding, errors='strict')
 
 
 class ContentDisposition(object):
@@ -75,11 +56,7 @@ class ContentDisposition(object):
 
         self.disposition = disposition
         self.location = location
-        if assocs is None:
-            self.assocs = {}
-        else:
-            # XXX Check that parameters aren't repeated
-            self.assocs = dict((key.lower(), val) for (key, val) in assocs)
+        self.assocs = assocs or {}
 
     @property
     def filename_unsafe(self):
@@ -100,7 +77,7 @@ class ContentDisposition(object):
         """
 
         if 'filename*' in self.assocs:
-            return self.assocs['filename*'].string
+            return self.assocs['filename*']
         elif 'filename' in self.assocs:
             # XXX Reject non-ascii (parsed via qdtext) here?
             return self.assocs['filename']
@@ -207,7 +184,6 @@ def parse_headers(content_disposition, location=None, relaxed=False):
         # XXX Would prefer to accept only the quoted whitespace
         # case, rather than normalising everything.
         content_disposition = normalize_ws(content_disposition)
-        parser = content_disposition_value_relaxed
     else:
         # Turns out this is occasionally broken: two spaces inside
         # a quoted_string's qdtext. Firefox and Chrome save the two spaces.
@@ -215,14 +191,10 @@ def parse_headers(content_disposition, location=None, relaxed=False):
             raise ValueError(
                 content_disposition, 'Contains nonstandard whitespace')
 
-        parser = content_disposition_value
+    disposition, params = parse_options_header(content_disposition)
 
-    try:
-        parsed = parser.parse(content_disposition)
-    except FullFirstMatchException:
-        return ContentDisposition(location=location)
     return ContentDisposition(
-        disposition=parsed[0], assocs=parsed[1:], location=location)
+        disposition=disposition, assocs=params, location=location)
 
 
 def parse_httplib2_response(response, **kwargs):
@@ -249,100 +221,15 @@ def parse_ext_value(val):
     else:
         charset, coded = val
         langtag = None
-    if not PY3K and isinstance(coded, unicode):
-        coded = coded.encode('ascii')
     decoded = percent_decode(coded, encoding=charset)
     return LangTagged(decoded, langtag)
 
 
-# Currently LEPL doesn't handle case-insensivitity:
-# https://groups.google.com/group/lepl/browse_thread/thread/68e7b136038772ca
-def CaseInsensitiveLiteral(lit):
-    return Regexp('(?i)' + re.escape(lit))
-
-
 # RFC 2616
 separator_chars = "()<>@,;:\\\"/[]?={} \t"
-ctl_chars = ''.join(chr(i) for i in xrange(32)) + chr(127)
-nontoken_chars = separator_chars + ctl_chars
 
 # RFC 5987
 attr_chars_nonalnum = '!#$&+-.^_`|~'
-attr_chars = ascii_letters + digits + attr_chars_nonalnum
-
-# RFC 5987 gives this alternative construction of the token character class
-token_chars = attr_chars + "*'%"
-
-
-# To debug, wrap in this block:
-#with TraceVariables():
-
-# Definitions from https://tools.ietf.org/html/rfc2616#section-2.2
-# token was redefined from attr_chars to avoid using AnyBut,
-# which might include non-ascii octets.
-token = Any(token_chars)[1:, ...]
-
-
-# RFC 2616 says some linear whitespace (LWS) is in fact allowed in text
-# and qdtext; however it also mentions folding that whitespace into
-# a single SP (which isn't in CTL) before interpretation.
-# Assume the caller already that folding when parsing headers.
-
-# NOTE: qdtext also allows non-ascii, which we choose to parse
-# as ISO-8859-1; rejecting it entirely would also be permitted.
-# Some broken browsers attempt encoding-sniffing, which is broken
-# because the spec only allows iso, and because encoding-sniffing
-# can mangle valid values.
-# Everything else in this grammar (including RFC 5987 ext values)
-# is in an ascii-safe encoding.
-# Because of this, this is the only character class to use AnyBut,
-# and all the others are defined with Any.
-qdtext = AnyBut('"' + ctl_chars)
-
-char = Any(''.join(chr(i) for i in xrange(128)))  # ascii range: 0-127
-
-quoted_pair = Drop('\\') + char
-quoted_string = Drop('"') & (quoted_pair | qdtext)[:, ...] & Drop('"')
-
-value = token | quoted_string
-
-# Other charsets are forbidden, the spec reserves them
-# for future evolutions.
-charset = (CaseInsensitiveLiteral('UTF-8')
-           | CaseInsensitiveLiteral('ISO-8859-1'))
-
-# XXX See RFC 5646 for the correct definition
-language = token
-
-attr_char = Any(attr_chars)
-hexdig = Any(hexdigits)
-pct_encoded = '%' + hexdig + hexdig
-value_chars = (pct_encoded | attr_char)[...]
-ext_value = (
-    charset & Drop("'") & Optional(language) & Drop("'")
-    & value_chars) > parse_ext_value
-ext_token = token + '*'
-noext_token = ~Lookahead(ext_token) & token
-
-# Adapted from https://tools.ietf.org/html/rfc6266
-# Mostly this was simplified to fold filename / filename*
-# into the normal handling of ext_token / noext_token
-with DroppedSpace():
-    disposition_parm = (
-        (ext_token & Drop('=') & ext_value)
-        | (noext_token & Drop('=') & value)) > tuple
-    disposition_type = (
-        CaseInsensitiveLiteral('inline')
-        | CaseInsensitiveLiteral('attachment')
-        | token)
-    content_disposition_value = (
-        disposition_type & Star(Drop(';') & disposition_parm))
-
-    # Allows nonconformant final semicolon
-    # I've seen it in the wild, and browsers accept it
-    # http://greenbytes.de/tech/tc2231/#attwithasciifilenamenqs
-    content_disposition_value_relaxed = (
-        content_disposition_value & Optional(Drop(';')))
 
 
 def is_token_char(ch):
@@ -353,13 +240,7 @@ def is_token_char(ch):
     return 31 < asciicode < 127 and ch not in separator_chars
 
 
-def usesonlycharsfrom(candidate, chars):
-    # Found that shortcut in urllib.quote
-    return candidate.rstrip(chars) == ''
-
-
 def is_token(candidate):
-    #return usesonlycharsfrom(candidate, token_chars)
     return all(is_token_char(ch) for ch in candidate)
 
 
@@ -389,7 +270,7 @@ def qd_quote(text):
 
 
 def build_header(
-    filename, disposition='attachment', filename_compat=None
+        filename, disposition='attachment', filename_compat=None
 ):
     """Generate a Content-Disposition header for a given filename.
 
@@ -421,27 +302,26 @@ def build_header(
     rv = disposition
 
     if is_token(filename):
-        rv += '; filename=%s' % (filename, )
-        return rv.encode('iso-8859-1')
+        rv += '; filename=%s' % (filename,)
+        return rv
     elif is_ascii(filename) and is_lws_safe(filename):
         qd_filename = qd_quote(filename)
-        rv += '; filename="%s"' % (qd_filename, )
+        rv += '; filename="%s"' % (qd_filename,)
         if qd_filename == filename:
             # RFC 6266 claims some implementations are iffy on qdtext's
             # backslash-escaping, we'll include filename* in that case.
-            return rv.encode('iso-8859-1')
+            return rv
     elif filename_compat:
         if is_token(filename_compat):
-            rv += '; filename=%s' % (filename_compat, )
+            rv += '; filename=%s' % (filename_compat,)
         else:
             assert is_lws_safe(filename_compat)
-            rv += '; filename="%s"' % (qd_quote(filename_compat), )
+            rv += '; filename="%s"' % (qd_quote(filename_compat),)
 
     # alnum are already considered always-safe, but the rest isn't.
     # Python encodes ~ when it shouldn't, for example.
     rv += "; filename*=utf-8''%s" % (percent_encode(
-        filename, safe=attr_chars_nonalnum, encoding='utf-8'), )
+        filename, safe=attr_chars_nonalnum, encoding='utf-8'),)
 
     # This will only encode filename_compat, if it used non-ascii iso-8859-1.
     return rv.encode('iso-8859-1')
-

@@ -2,21 +2,27 @@
 from setuptools import setup
 
 setup(
-    author='Simon Woerner',
-    author_email='git@simon-woerner.de',
-    description='Parse and generate Content-Disposition headers; Fork of rfc6266 with bugfixes.',
-    url='https://github.com/SWW13/python-rfc6266-parser',
+    author='Arseniy Baranov',
+    author_email='arseniy.baranov@gmail.com',
+    description='Fork of rfc6266 package with python 3.6+ support',
+    url='https://github.com/genme/python-rfc6266-parser',
     keywords='rfc6266 parser Content-Disposition http attachments',
     name='rfc6266-parser',
-    version='0.0.6',  # semver
+    version='0.1.0',
     license='GNU LGPL',
     platforms='OS-independent',
     py_modules=['rfc6266_parser', 'test_rfc6266_parser'],
-    install_requires=['LEPL'],
-    use_2to3=True,
+    extras_require={
+        'dev': [
+            'pytest==4.6.11',
+            'flake8',
+            'pytest-localserver',
+            'requests',
+            'httplib2'
+        ],
+    },
     long_description=open('README').read(),
     classifiers=(
-        'Programming Language :: Python :: 2',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: Implementation :: CPython',
         'Programming Language :: Python :: Implementation :: PyPy',
