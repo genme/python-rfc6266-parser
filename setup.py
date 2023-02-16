@@ -13,7 +13,7 @@ setup(
     platforms='OS-independent',
     py_modules=['rfc6266_parser', 'test_rfc6266_parser'],
     install_requires=[
-        'werkzeug==1.0.1'
+        'werkzeug'
     ],
     extras_require={
         'dev': [
